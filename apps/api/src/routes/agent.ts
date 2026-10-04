@@ -38,6 +38,7 @@ import {
 	tailStream,
 } from "@databuddy/redis/stream-buffer";
 import { ratelimit } from "@databuddy/redis/rate-limit";
+import { isBillingUnavailable } from "@databuddy/shared/billing";
 import {
 	convertToModelMessages,
 	generateId,
@@ -85,6 +86,8 @@ function jsonError(status: number, code: string, message: string): Response {
 
 const INTERNAL_AGENT_ERROR_MESSAGE =
 	"Agent request failed. Please try again shortly.";
+const BILLING_UNAVAILABLE_MESSAGE =
+	"Billing is temporarily unavailable. Please try again shortly.";
 
 function getErrorName(error: unknown, fallback = "UnknownError"): string {
 	if (error instanceof Error) {
@@ -548,6 +551,13 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 					error_type: getErrorName(error),
 					source: "slack",
 				});
+				if (isBillingUnavailable(error)) {
+					return jsonError(
+						503,
+						"BILLING_UNAVAILABLE",
+						BILLING_UNAVAILABLE_MESSAGE
+					);
+				}
 				return jsonError(500, "INTERNAL_ERROR", INTERNAL_AGENT_ERROR_MESSAGE);
 			}
 		},
@@ -1199,6 +1209,13 @@ export const agent = new Elysia({ prefix: "/v1/agent" })
 						...(user?.id ? { agent_user_id: user.id } : {}),
 						error_type: getErrorName(error),
 					});
+					if (isBillingUnavailable(error)) {
+						return jsonError(
+							503,
+							"BILLING_UNAVAILABLE",
+							BILLING_UNAVAILABLE_MESSAGE
+						);
+					}
 					return jsonError(500, "INTERNAL_ERROR", INTERNAL_AGENT_ERROR_MESSAGE);
 				}
 			})();
