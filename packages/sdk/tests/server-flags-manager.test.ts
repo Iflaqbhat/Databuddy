@@ -550,6 +550,120 @@ describe("ServerFlagsManager", () => {
 			});
 		});
 
+		it("clears and fetches again when the API URL changes", async () => {
+			fetchMock.restore();
+			const urls: string[] = [];
+			globalThis.fetch = mock(async (input: string | URL | Request) => {
+				const url = input.toString();
+				urls.push(url);
+				return Response.json({
+					flags: {
+						endpoint: {
+							...FLAG_ENABLED,
+							value: url.startsWith("https://first.example")
+								? "first"
+								: "second",
+						},
+					},
+				});
+			}) as typeof fetch;
+			const manager = await create({
+				clientId: "test-id",
+				apiUrl: "https://first.example",
+				autoFetch: true,
+			});
+			expect(manager.getValue("endpoint")).toBe("first");
+
+			manager.updateConfig({
+				clientId: "test-id",
+				apiUrl: "https://second.example",
+			});
+
+			expect(manager.getSnapshot().flags).toEqual({});
+			expect((await manager.getFlag("endpoint")).value).toBe("second");
+			expect(urls).toContain("https://second.example/public/v1/flags/bulk");
+		});
+
+		it("preserves the cache when an explicit API URL matches the default", async () => {
+			const manager = await create({ clientId: "test-id", autoFetch: true });
+			const snapshot = manager.getSnapshot().flags;
+			const requests = fetchMock.calls.length;
+
+			manager.updateConfig({
+				clientId: "test-id",
+				apiUrl: "https://api.databuddy.cc",
+			});
+
+			expect(manager.getSnapshot().flags).toEqual(snapshot);
+			expect(fetchMock.calls).toHaveLength(requests);
+		});
+
+		it("does not expose prior-endpoint flags when the new endpoint fetch fails", async () => {
+			fetchMock.restore();
+			globalThis.fetch = mock(async (input: string | URL | Request) => {
+				if (input.toString().startsWith("https://second.example")) {
+					return Response.json(
+						{ error: "Flag service unavailable" },
+						{ status: 503 }
+					);
+				}
+				return Response.json({ flags: { "first-only": FLAG_ENABLED } });
+			}) as typeof fetch;
+			const manager = await create({
+				clientId: "test-id",
+				apiUrl: "https://first.example",
+				autoFetch: true,
+			});
+			expect(manager.getSnapshot().flags["first-only"]).toBeDefined();
+
+			manager.updateConfig({
+				clientId: "test-id",
+				apiUrl: "https://second.example",
+			});
+			await manager.fetchAllFlags();
+
+			expect(manager.getSnapshot().flags).toEqual({});
+			expect(manager.getMemoryFlags()).toEqual({});
+			expect(manager.getLastError()).toMatchObject({
+				status: 503,
+				retryable: true,
+			});
+		});
+
+		it("ignores an old endpoint response that finishes after the API URL changes", async () => {
+			fetchMock.restore();
+			let resolveOldResponse: (response: Response) => void = () => {
+				throw new Error("Old endpoint request was not started");
+			};
+			globalThis.fetch = mock(async (input: string | URL | Request) => {
+				if (input.toString().startsWith("https://first.example")) {
+					return new Promise<Response>((resolve) => {
+						resolveOldResponse = resolve;
+					});
+				}
+				return Response.json({ flags: { "second-only": FLAG_ENABLED } });
+			}) as typeof fetch;
+			const manager = await create({
+				clientId: "test-id",
+				apiUrl: "https://first.example",
+			});
+			const oldFetch = manager.fetchAllFlags();
+
+			manager.updateConfig({
+				clientId: "test-id",
+				apiUrl: "https://second.example",
+			});
+			await manager.fetchAllFlags();
+			resolveOldResponse(
+				Response.json({ flags: { "first-only": FLAG_ENABLED } })
+			);
+			await oldFetch;
+
+			expect(manager.getSnapshot().flags).toEqual({
+				"second-only": FLAG_ENABLED,
+			});
+		});
+
 		it("settles a pre-flush getFlag against the new identity", async () => {
 			fetchMock.restore();
 			const bodies: Record<string, unknown>[] = [];

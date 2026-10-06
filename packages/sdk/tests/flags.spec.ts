@@ -69,6 +69,64 @@ test.describe("BrowserFlagsManager", () => {
 		await waitForSDK(page);
 	});
 
+	test("clears memory and browser storage when the API endpoint changes", async ({
+		page,
+	}) => {
+		await page.route("**/*.example/public/v1/flags/bulk", async (route) => {
+			const host = new URL(route.request().url()).hostname;
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ flags: { [host]: MOCK_FLAG_ENABLED } }),
+			});
+		});
+
+		const result = await page.evaluate(async () => {
+			const storage = new window.__SDK__.BrowserFlagStorage();
+			const manager = new window.__SDK__.BrowserFlagsManager({
+				config: {
+					clientId: "test-id",
+					apiUrl: "https://first.example",
+					autoFetch: false,
+				},
+				storage,
+			});
+			manager.start();
+			try {
+				await manager.fetchAllFlags();
+				const before = manager.getMemoryFlags();
+				const storedBefore = Object.keys(storage.getAll());
+
+				manager.updateConfig({
+					clientId: "test-id",
+					apiUrl: "https://second.example",
+				});
+				const cleared = manager.getSnapshot().flags;
+				const storedAtSwitch = storage.getAll();
+				await manager.fetchAllFlags();
+
+				return {
+					before,
+					storedBefore,
+					cleared,
+					storedAtSwitch,
+					after: manager.getSnapshot().flags,
+					storedAfter: Object.keys(storage.getAll()),
+				};
+			} finally {
+				manager.destroy();
+			}
+		});
+
+		expect(result.before["first.example"]).toEqual(MOCK_FLAG_ENABLED);
+		expect(result.storedBefore).toHaveLength(1);
+		expect(result.cleared).toEqual({});
+		expect(result.storedAtSwitch).toEqual({});
+		expect(result.after).toEqual({ "second.example": MOCK_FLAG_ENABLED });
+		expect(result.storedAfter).toHaveLength(1);
+		expect(result.storedAfter[0]).toContain("second.example");
+	});
+
 	test.describe("initialization", () => {
 		test("creates manager and reaches ready state", async ({ page }) => {
 			const ready = await page.evaluate(async () => {

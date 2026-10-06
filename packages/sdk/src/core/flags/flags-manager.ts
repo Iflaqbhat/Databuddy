@@ -602,11 +602,14 @@ export abstract class BaseFlagsManager implements FlagsManager {
 	updateConfig(config: FlagsConfig): void {
 		const wasInactive = this.config.disabled || this.config.isPending;
 		const nextConfig = { ...this.config, ...config };
-		const contextChanged = this.activeContextChanged(
-			nextConfig.user,
-			nextConfig.environment,
-			nextConfig.clientId
-		);
+		const contextChanged =
+			(nextConfig.apiUrl ?? DEFAULT_API) !==
+				(this.config.apiUrl ?? DEFAULT_API) ||
+			this.activeContextChanged(
+				nextConfig.user,
+				nextConfig.environment,
+				nextConfig.clientId
+			);
 		this.config = nextConfig;
 		if (contextChanged) {
 			this.clearActiveContextState();
